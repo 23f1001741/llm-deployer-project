@@ -93,7 +93,7 @@ def process_build_task(data):
         brief = data.get('brief')
         checks = str(data.get('checks', ''))
 
-        prompt = f"""
+        code_prompt = f"""
         You are an expert web developer. Create a single, complete index.html file.
         Brief: {brief}
         The final code must be functional and self-contained.
@@ -101,12 +101,35 @@ def process_build_task(data):
         Generate only the full HTML file content and nothing else.
         """
         
-        response = client.chat.completions.create(
+        code_response = client.chat.completions.create(
             model="gpt-4o",
-            messages=[{"role": "user", "content": prompt}]
+            messages=[{"role": "user", "content": code_prompt}]
         )
-        generated_html = response.choices[0].message.content.strip()
+        generated_html = code_response.choices[0].message.content.strip()
         print("✅ LLM generated the HTML code.")
+
+        # --- NEW: LLM README.md GENERATION ---
+        readme_prompt = f"""
+        You are a technical writer. Create a professional README.md for a project.
+        Project Brief: {brief}
+        The project was implemented with the following code:
+        ```html
+        {generated_html}
+        ```
+        Generate a complete README.md file with the following sections:
+        - A project title.
+        - A brief one-paragraph summary of what the application does.
+        - A "How It Works" section explaining the code's functionality.
+        - A "License" section mentioning it is MIT licensed.
+        Generate only the markdown content for the file.
+        """
+        
+        readme_response = client.chat.completions.create(
+            model="gpt-4o", # Using gpt-4o is great for quality
+            messages=[{"role": "user", "content": readme_prompt}]
+        )
+        generated_readme = readme_response.choices[0].message.content.strip()
+        print("✅ LLM generated a professional README.md.")
 
         # --- 2. GITHUB REPO CREATION ---
         g = Github(os.getenv("GITHUB_PAT"))
@@ -124,7 +147,7 @@ def process_build_task(data):
         print(f"✅ Created new GitHub repo: {repo.full_name}")
 
         repo.create_file("LICENSE", "feat: add MIT license", MIT_LICENSE)
-        repo.create_file("README.md", "feat: initial commit", f"# {repo_name}\n\n{brief}")
+        repo.create_file("README.md", "docs: generate professional readme", generated_readme) # Use the new README
         repo.create_file("index.html", "feat: add application code", generated_html)
         repo.create_file(".github/workflows/deploy.yml", "ci: add GitHub Pages deployment workflow", GITHUB_WORKFLOW_YAML)
         
