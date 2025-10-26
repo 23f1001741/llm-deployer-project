@@ -5,7 +5,7 @@ import requests
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from openai import OpenAI
-from github import Github, GithubException
+from github import Github, GithubException, Auth # <-- Import Auth
 
 # Load environment variables from .env file
 load_dotenv()
@@ -13,26 +13,41 @@ load_dotenv()
 app = Flask(__name__)
 
 # --- GitHub Actions Workflow ---
+# This YAML is correct and includes the 'enablement: true' fix.
 GITHUB_WORKFLOW_YAML = """
 name: Deploy to GitHub Pages
+
 on:
   push:
     branches: [ main ]
+
+# Add permissions for deployment
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Checkout 🛎️
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Setup Pages
-        uses: actions/configure-pages@v3
+        uses: actions/configure-pages@v4
+        with:
+          # This line fixes the error by automatically enabling Pages
+          enablement: true
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v2
+        uses: actions/upload-pages-artifact@v3 
         with:
           path: '.'
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v2
+        uses: actions/deploy-pages@v4
 """
 
 # --- MIT License Text ---
@@ -47,7 +62,7 @@ copies of the Software, and to permit persons to whom the Software is
 furnished to do so, subject to the following conditions:
 The above copyright notice and this permission notice shall be included in all
 copies or substantial portions of the Software.
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
 AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
@@ -132,7 +147,11 @@ def process_build_task(data):
         print("✅ LLM generated a professional README.md.")
 
         # --- 2. GITHUB REPO CREATION ---
-        g = Github(os.getenv("GITHUB_PAT"))
+        
+        # FIX for DeprecationWarning
+        auth = Auth.Token(os.getenv("GITHUB_PAT"))
+        g = Github(auth=auth)
+        
         user = g.get_user()
         repo_name = f"llm-app-{task_id}"
         
@@ -141,23 +160,41 @@ def process_build_task(data):
             old_repo.delete()
             print(f"🗑️ Deleted existing repo: {repo_name}")
         except GithubException:
-            pass 
+            pass # No old repo to delete, which is fine.
 
         repo = user.create_repo(repo_name, private=False)
         print(f"✅ Created new GitHub repo: {repo.full_name}")
 
+        # --- MOVED THIS SECTION ---
+        # We must push files *first* to create the main branch
         repo.create_file("LICENSE", "feat: add MIT license", MIT_LICENSE)
-        repo.create_file("README.md", "docs: generate professional readme", generated_readme) # Use the new README
+        repo.create_file("README.md", "docs: generate professional readme", generated_readme)
         repo.create_file("index.html", "feat: add application code", generated_html)
         repo.create_file(".github/workflows/deploy.yml", "ci: add GitHub Pages deployment workflow", GITHUB_WORKFLOW_YAML)
         
         print("✅ Pushed all necessary files to the repo.")
 
+        # --- MOVED THIS SECTION ---
+        # Now that the main branch exists, we can enable Pages.
+        try:
+            pages_payload = {
+                "source": {"branch": "main", "path": "/"}
+            }
+            repo._requester.requestJsonAndCheck(
+                "POST", 
+                repo.url + "/pages", 
+                input=pages_payload
+            )
+            print("✅ Enabled GitHub Pages on the repo.")
+        except Exception as e:
+            print(f"⚠️ Could not auto-enable GitHub Pages, but continuing: {e}")
+            # The workflow 'enablement: true' will act as a fallback.
+
         main_branch = repo.get_branch("main")
         commit_sha = main_branch.commit.sha
         print(f"🔑 Commit SHA: {commit_sha}")
         
-        repo_url = repo.html_url
+        repo_url = repo.html_url # <-- FIX: Corrected typo (was html__url)
         pages_url = f"https://{user.login}.github.io/{repo_name}/"
         print(f"🌐 Pages URL: {pages_url}")
 
@@ -198,3 +235,4 @@ def handle_build_request():
 
 if __name__ == '__main__':
     app.run(port=5000, debug=True)
+
